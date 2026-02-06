@@ -253,6 +253,11 @@ requests.post('http://device-ip:6643/gestures/tap',
 import asyncio
 from typing import List, Dict, Any, Tuple
 from droidrun import IOSTools, DroidAgent
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class CompleteIOSTools(IOSTools):
@@ -262,10 +267,11 @@ class CompleteIOSTools(IOSTools):
         """Set the workflow context (required by DroidAgent)."""
         self._ctx = ctx
 
-    def get_date(self) -> str:
+    async def get_date(self) -> str:
         """Get the current date and time on iOS device."""
         try:
             import requests
+
             date_url = f"{self.url}/system/date"
             response = requests.get(date_url)
             if response.status_code == 200:
@@ -273,14 +279,17 @@ class CompleteIOSTools(IOSTools):
             else:
                 # Fallback to returning current system time
                 import datetime
+
                 return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         except Exception:
             import datetime
+
             return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    def get_apps(self, include_system: bool = True) -> List[Dict[str, Any]]:
+    async def get_apps(self, include_system: bool = True) -> List[Dict[str, Any]]:
         """Get installed apps with bundle identifier and name."""
-        packages = self.list_packages(include_system_apps=include_system)
+        # Use await because we override list_packages to be async
+        packages = await self.list_packages(include_system_apps=include_system)
         # Convert to format expected by the method
         return [{"package": pkg, "label": pkg.split(".")[-1]} for pkg in packages]
 
@@ -299,7 +308,7 @@ class CompleteIOSTools(IOSTools):
 
         raise ValueError(f"No element found with index {index}")
 
-    def input_text(self, text: str, index: int = -1, clear: bool = False) -> str:
+    async def input_text(self, text: str, index: int = -1, clear: bool = False) -> str:
         """
         Input text on the iOS device.
 
@@ -317,7 +326,7 @@ class CompleteIOSTools(IOSTools):
 
             # If index is provided and valid, tap on that element first
             if index >= 0:
-                self.tap_by_index(index)
+                await self.tap_by_index(index)
 
             # Note: clear parameter is not currently supported by iOS portal API
             # Future enhancement could add support for clearing text
@@ -338,12 +347,82 @@ class CompleteIOSTools(IOSTools):
         except Exception as e:
             return f"Error sending text input: {str(e)}"
 
+    async def tap_on_index(self, index: int) -> str:
+        """Alias for tap_by_index."""
+        return await self.tap_by_index(index)
+
+    def _format_elements(self, elements: List[Dict[str, Any]]) -> str:
+        """Format elements for LLM consumption."""
+        lines = []
+        for elem in elements:
+            idx = elem.get("index")
+            text = elem.get("text", "")
+            type_ = elem.get("type", "")
+            lines.append(f"[{idx}] {type_} '{text}'")
+        return "\n".join(lines)
+
+    # Overrides for IOSTools sync methods to make them async for DroidAgent compatibility
+
+    async def get_state(self):
+        # Call parent sync method
+        state_dict = super().get_state()
+
+        a11y_tree = state_dict.get("a11y_tree", [])
+        phone_state = state_dict.get("phone_state", {})
+
+        formatted_text = self._format_elements(a11y_tree)
+        focused_text = ""  # No focus info for now
+
+        return formatted_text, focused_text, a11y_tree, phone_state
+
+    async def tap_by_index(self, index: int) -> str:
+        return super().tap_by_index(index)
+
+    async def swipe(
+        self, start_x: int, start_y: int, end_x: int, end_y: int, duration_ms: int = 300
+    ) -> bool:
+        return super().swipe(start_x, start_y, end_x, end_y, duration_ms)
+
+    async def drag(
+        self,
+        start_x: int,
+        start_y: int,
+        end_x: int,
+        end_y: int,
+        duration_ms: int = 3000,
+    ) -> bool:
+        return super().drag(start_x, start_y, end_x, end_y, duration_ms)
+
+    async def back(self) -> str:
+        try:
+            return super().back()
+        except NotImplementedError:
+            return "Error: Back button is not supported on iOS"
+
+    async def press_key(self, keycode: int) -> str:
+        return super().press_key(keycode)
+
+    async def start_app(self, package: str, activity: str = "") -> str:
+        return super().start_app(package, activity)
+
+    async def take_screenshot(self) -> Tuple[str, bytes]:
+        return super().take_screenshot()
+
+    async def list_packages(self, include_system_apps: bool = False) -> List[str]:
+        return super().list_packages(include_system_apps)
+
+    async def get_memory(self) -> List[str]:
+        return super().get_memory()
+
+    async def complete(self, success: bool, reason: str = "") -> None:
+        return super().complete(success, reason)
+
 
 async def main():
     from droidrun import load_llm
     import os
 
-    GEMINI_API_KEY = "" 
+    GEMINI_API_KEY = ""
 
     os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
 
@@ -356,14 +435,16 @@ async def main():
     agent = DroidAgent(
         goal="Open Settings and check WiFi",
         tools=tools,
-        llms=llm  # Provide LLM instance
+        llms=llm,  # Provide LLM instance
     )
 
     result = await agent.run()
     print(f"\n✅ Result: {result}")
 
+
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 ```
 
