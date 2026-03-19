@@ -52,12 +52,44 @@ struct GestureResponse: Encodable {
 struct TypeBody: Decodable {
     let rect: String
     let text: String
+    let clear: Bool?
+}
+
+struct ClearBody: Decodable {
+    let rect: String
+}
+
+struct ClearResponse: Encodable {
+    let message: String
+    let charactersDeleted: Int
+    let method: String
+    let durationMs: Double
+}
+
+struct TypeFocusedBody: Decodable {
+    let text: String
 }
 
 struct KeyBody: Decodable {
     let key: Int
 }
 
+struct DragBody: Decodable {
+    let x1: CGFloat
+    let y1: CGFloat
+    let x2: CGFloat
+    let y2: CGFloat
+    let duration: Double?  // seconds, defaults to 0.5
+}
+
+struct ScreenSizeResponse: Encodable {
+    let width: CGFloat
+    let height: CGFloat
+}
+
+struct DateResponse: Encodable {
+    let date: String
+}
 
 @HTTPHandler
 struct DroidrunPortalHandler {
@@ -117,10 +149,25 @@ struct DroidrunPortalHandler {
     
     @JSONRoute("POST /inputs/type")
     func enterText(_ body: TypeBody) async throws -> GestureResponse {
+        if body.clear == true {
+            try await DroidrunPortalTools.shared.clearText(rect: body.rect)
+        }
         try await DroidrunPortalTools.shared.enterText(rect: body.rect, text: body.text)
         return GestureResponse(message: "entered text")
     }
+
+    @JSONRoute("POST /inputs/clear")
+    func clearText(_ body: ClearBody) async throws -> ClearResponse {
+        let result = try await DroidrunPortalTools.shared.clearText(rect: body.rect)
+        return result
+    }
     
+    @JSONRoute("POST /inputs/type_focused")
+    func enterTextFocused(_ body: TypeFocusedBody) async throws -> GestureResponse {
+        try await DroidrunPortalTools.shared.enterText(body.text)
+        return GestureResponse(message: "entered text")
+    }
+
     @JSONRoute("POST /inputs/key")
     func pressKey(_ body: KeyBody) async throws -> GestureResponse {
         guard let key = XCUIDevice.Button(rawValue: body.key) else {
@@ -129,6 +176,32 @@ struct DroidrunPortalHandler {
         
         try await DroidrunPortalTools.shared.pressKey(key: key)
         return GestureResponse(message: "pressed key")
+    }
+
+    @JSONRoute("POST /gestures/back")
+    func back() async throws -> GestureResponse {
+        try await DroidrunPortalTools.shared.back()
+        return GestureResponse(message: "navigated back")
+    }
+
+    @JSONRoute("POST /gestures/drag")
+    func drag(_ body: DragBody) async throws -> GestureResponse {
+        try await DroidrunPortalTools.shared.drag(
+            x1: body.x1, y1: body.y1,
+            x2: body.x2, y2: body.y2,
+            duration: body.duration ?? 0.5
+        )
+        return GestureResponse(message: "dragged")
+    }
+
+    @JSONRoute("GET /device/screen")
+    func screenSize() async throws -> ScreenSizeResponse {
+        return try await DroidrunPortalTools.shared.getScreenSize()
+    }
+
+    @JSONRoute("GET /device/date")
+    func date() async throws -> DateResponse {
+        return DateResponse(date: DroidrunPortalTools.shared.getDate())
     }
 
     @HTTPRoute("GET /debug")

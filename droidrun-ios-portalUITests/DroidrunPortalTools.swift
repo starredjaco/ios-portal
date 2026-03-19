@@ -12,6 +12,7 @@ enum SwipeDirection: String, Codable {
     case up, down, left, right
 }
 
+
 extension XCUIDevice.Button {
     init?(rawValue: Int) {
         switch rawValue {
@@ -54,7 +55,8 @@ struct PhoneState: Codable {
 final class DroidrunPortalTools: XCTestCase {
     var app: XCUIApplication?
     var bundleIdentifier: String?
-    
+    private var cachedScreenSize: ScreenSizeResponse?
+
     static let shared = DroidrunPortalTools()
 
     func reset() {
@@ -209,40 +211,123 @@ final class DroidrunPortalTools: XCTestCase {
     }
     
     @MainActor
+    @discardableResult
+    func clearText(rect: String, timeout: TimeInterval = 30) throws -> ClearResponse {
+        print("Clear text \(rect) timeout: \(timeout)s")
+        guard let app else {
+            throw Error.noAppFound
+        }
+
+        // Tap the element to focus it
+        try tapElement(rect: rect, count: 1, longPress: false)
+
+        let focusedElement = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
+        guard focusedElement.exists else {
+            throw Error.invalidTool(name: "clearText", message: "No element has keyboard focus after tapping.")
+        }
+
+        let startTime = CFAbsoluteTimeGetCurrent()
+        var totalDeleted = 0
+
+        while true {
+            // Check timeout
+            let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+            if elapsed > timeout {
+                print("Clear timed out after \(String(format: "%.1f", elapsed))s")
+                break
+            }
+
+            // Read current value
+            let currentValue = focusedElement.value as? String ?? ""
+            if currentValue.isEmpty || currentValue == focusedElement.placeholderValue {
+                break  // Done
+            }
+
+            let countBefore = currentValue.count
+
+            // Fast pass: tap bottom-right, bulk delete
+            let endCoordinate = focusedElement.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.99))
+            endCoordinate.tap()
+            let deleteString = String(repeating: XCUIKeyboardKey.delete.rawValue, count: countBefore)
+            app.typeText(deleteString)
+
+            // Check if fast pass made progress
+            let afterFast = focusedElement.value as? String ?? ""
+            if afterFast.isEmpty || afterFast == focusedElement.placeholderValue {
+                totalDeleted += countBefore
+                break  // Done
+            }
+
+            let deletedThisPass = countBefore - afterFast.count
+            if deletedThisPass > 0 {
+                totalDeleted += deletedThisPass
+                continue  // Fast pass made progress, loop back for another
+            }
+
+            // Fast pass made no progress — try one single delete (reliable)
+            app.typeText(XCUIKeyboardKey.delete.rawValue)
+            let afterSingle = focusedElement.value as? String ?? ""
+            let singleProgress = afterFast.count - afterSingle.count
+
+            if singleProgress > 0 {
+                totalDeleted += singleProgress
+                continue  // Single delete worked, loop back to try fast again
+            }
+
+            // Neither fast nor single delete made progress — give up
+            print("No progress after fast + single delete, stopping")
+            break
+        }
+
+        let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+        print("Cleared \(totalDeleted) chars in \(String(format: "%.1f", elapsed))ms")
+
+        return ClearResponse(
+            message: "cleared \(totalDeleted) characters",
+            charactersDeleted: totalDeleted,
+            method: "adaptive",
+            durationMs: elapsed
+        )
+    }
+
+    @MainActor
     func enterText(rect: String, text: String) async throws {
         print("Enter Text \(rect) -> \(text)")
         guard let app else {
             throw Error.noAppFound
         }
         try tapElement(rect: rect, count: 1, longPress: false)
-        let keyboard = app.keyboards.element
-        
-        let appeared = keyboard.waitForExistence(timeout: 2)
-        guard appeared && keyboard.isHittable else {
-            throw Error.invalidTool(name: "enterText", message: "Keyboard not present or not hittable after tapping element.")
+
+        // Check for focused element — works with both software and hardware keyboard
+        let focusedElement = app.descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
+
+        // If no focus yet, wait a moment and check again
+        if !focusedElement.exists {
+            _ = focusedElement.waitForExistence(timeout: 2)
+        }
+        guard focusedElement.exists else {
+            throw Error.invalidTool(name: "enterText", message: "No element has keyboard focus after tapping.")
         }
 
-        // Defensive: Check if any text field is focused
-        let focusedElement = app.descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
-        guard focusedElement.exists else {
-            throw Error.invalidTool(name: "enterText", message: "No element has keyboard focus.")
-        }
-        
-        app.typeText(text + "\n")
+        app.typeText(text)
     }
-    
+
     @MainActor
     func enterText(_ text: String) throws {
         guard let app = self.app else {
             throw Error.noAppFound
         }
-        // Find the focused element
-        let focusedElement = app.descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
-        guard focusedElement.exists else {
-            throw Error.invalidTool(name: "enterText", message: "No element has keyboard focus.")
+        print("Typing text into focused element: \(text.prefix(50))... (\(text.count) chars)")
+        // Chunk long text to avoid XCTest assertion failures from stale element references
+        let chunkSize = 100
+        var offset = text.startIndex
+        while offset < text.endIndex {
+            let end = text.index(offset, offsetBy: chunkSize, limitedBy: text.endIndex) ?? text.endIndex
+            let chunk = String(text[offset..<end])
+            app.typeText(chunk)
+            offset = end
         }
-        print("Typing text into focused element: \(text)")
-        focusedElement.typeText(text)
     }
     
     @MainActor
@@ -286,6 +371,35 @@ final class DroidrunPortalTools: XCTestCase {
         return snapshot.pngRepresentation
     }
     
+    @MainActor
+    func drag(x1: CGFloat, y1: CGFloat, x2: CGFloat, y2: CGFloat, duration: Double) throws {
+        print("Drag from (\(x1),\(y1)) to (\(x2),\(y2)) duration: \(duration)s")
+        guard let app else {
+            throw Error.noAppFound
+        }
+        let root = app.coordinate(withNormalizedOffset: .zero)
+        let start = root.withOffset(CGVector(dx: x1, dy: y1))
+        let end = root.withOffset(CGVector(dx: x2, dy: y2))
+        start.press(forDuration: duration, thenDragTo: end)
+    }
+
+    @MainActor
+    func getScreenSize() throws -> ScreenSizeResponse {
+        if let cached = cachedScreenSize {
+            return cached
+        }
+        let size = XCUIScreen.main.screenshot().image.size
+        let response = ScreenSizeResponse(width: size.width, height: size.height)
+        cachedScreenSize = response
+        return response
+    }
+
+    func getDate() -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: Date())
+    }
+
     @MainActor
     func back() throws {
         guard let app = self.app else {
