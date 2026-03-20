@@ -8,11 +8,6 @@
 import Foundation
 import XCTest
 
-enum SwipeDirection: String, Codable {
-    case up, down, left, right
-}
-
-
 extension XCUIDevice.Button {
     init?(rawValue: Int) {
         switch rawValue {
@@ -167,47 +162,15 @@ final class DroidrunPortalTools: XCTestCase {
     }
     
     @MainActor
-    func scroll(x: CGFloat, y: CGFloat, distanceX: CGFloat, distanceY: CGFloat) throws {
+    func swipe(x1: CGFloat, y1: CGFloat, x2: CGFloat, y2: CGFloat, duration: Double) throws {
+        print("Swipe from (\(x1),\(y1)) to (\(x2),\(y2)) duration: \(duration)s")
         guard let app else {
             throw Error.noAppFound
         }
-        let mid  = CGPoint(x: x, y: y)
-        
         let root = app.coordinate(withNormalizedOffset: .zero)
-        
-        let start = root.withOffset(CGVector(dx: mid.x, dy: mid.y))
-        
-        let end = root.withOffset(CGVector(dx: mid.x + distanceX, dy: mid.y + distanceY))
-        
-        start.press(forDuration: 0, thenDragTo: end)
-    }
-    
-    @MainActor
-    func swipe(x: CGFloat, y: CGFloat, direction: SwipeDirection) throws {
-        print("Swipe \(direction) {x: \(x), y: \(y)}")
-        guard let app else {
-            throw Error.noAppFound
-        }
-        let mid = CGPoint(x: x, y: y)
-        
-        // Root (0,0) of the screen
-        let root = app.coordinate(withNormalizedOffset: .zero)
-        
-        let start = root.withOffset(CGVector(dx: mid.x, dy: mid.y))
-        
-        let end: XCUICoordinate
-        switch direction {
-        case .up:
-            end = root.withOffset(CGVector(dx: mid.x, dy: mid.y - 100))
-        case .down:
-            end = root.withOffset(CGVector(dx: mid.x, dy: mid.y + 100))
-        case .left:
-            end = root.withOffset(CGVector(dx: mid.x - 100, dy: mid.y))
-        case .right:
-            end = root.withOffset(CGVector(dx: mid.x + 100, dy: mid.y))
-        }
-        
-        start.press(forDuration: 0.1, thenDragTo: end)
+        let start = root.withOffset(CGVector(dx: x1, dy: y1))
+        let end = root.withOffset(CGVector(dx: x2, dy: y2))
+        start.press(forDuration: duration, thenDragTo: end)
     }
     
     @MainActor
@@ -371,18 +334,6 @@ final class DroidrunPortalTools: XCTestCase {
         return snapshot.pngRepresentation
     }
     
-    @MainActor
-    func drag(x1: CGFloat, y1: CGFloat, x2: CGFloat, y2: CGFloat, duration: Double) throws {
-        print("Drag from (\(x1),\(y1)) to (\(x2),\(y2)) duration: \(duration)s")
-        guard let app else {
-            throw Error.noAppFound
-        }
-        let root = app.coordinate(withNormalizedOffset: .zero)
-        let start = root.withOffset(CGVector(dx: x1, dy: y1))
-        let end = root.withOffset(CGVector(dx: x2, dy: y2))
-        start.press(forDuration: duration, thenDragTo: end)
-    }
-
     @MainActor
     func getScreenSize() throws -> ScreenSizeResponse {
         if let cached = cachedScreenSize {

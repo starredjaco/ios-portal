@@ -40,9 +40,11 @@ struct TapBody: Decodable {
 }
 
 struct SwipeBody: Decodable {
-    let x: CGFloat
-    let y: CGFloat
-    let dir: SwipeDirection
+    let x1: CGFloat
+    let y1: CGFloat
+    let x2: CGFloat
+    let y2: CGFloat
+    let durationMs: Double?  // milliseconds, defaults to 300
 }
 
 struct GestureResponse: Encodable {
@@ -72,14 +74,6 @@ struct TypeFocusedBody: Decodable {
 
 struct KeyBody: Decodable {
     let key: Int
-}
-
-struct DragBody: Decodable {
-    let x1: CGFloat
-    let y1: CGFloat
-    let x2: CGFloat
-    let y2: CGFloat
-    let duration: Double?  // seconds, defaults to 0.5
 }
 
 struct ScreenSizeResponse: Encodable {
@@ -143,7 +137,8 @@ struct DroidrunPortalHandler {
     
     @JSONRoute("POST /gestures/swipe")
     func swipe(_ body: SwipeBody) async throws -> GestureResponse {
-        try await DroidrunPortalTools.shared.swipe(x: body.x, y: body.y, direction: body.dir)
+        let durationSec = (body.durationMs ?? 300) / 1000.0
+        try await DroidrunPortalTools.shared.swipe(x1: body.x1, y1: body.y1, x2: body.x2, y2: body.y2, duration: durationSec)
         return GestureResponse(message: "swiped")
     }
     
@@ -182,16 +177,6 @@ struct DroidrunPortalHandler {
     func back() async throws -> GestureResponse {
         try await DroidrunPortalTools.shared.back()
         return GestureResponse(message: "navigated back")
-    }
-
-    @JSONRoute("POST /gestures/drag")
-    func drag(_ body: DragBody) async throws -> GestureResponse {
-        try await DroidrunPortalTools.shared.drag(
-            x1: body.x1, y1: body.y1,
-            x2: body.x2, y2: body.y2,
-            duration: body.duration ?? 0.5
-        )
-        return GestureResponse(message: "dragged")
     }
 
     @JSONRoute("GET /device/screen")
