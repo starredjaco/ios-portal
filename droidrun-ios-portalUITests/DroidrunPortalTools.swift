@@ -50,7 +50,6 @@ struct PhoneState: Codable {
 final class DroidrunPortalTools: XCTestCase {
     var app: XCUIApplication?
     var bundleIdentifier: String?
-    private var cachedScreenSize: ScreenSizeResponse?
 
     static let shared = DroidrunPortalTools()
 
@@ -184,8 +183,12 @@ final class DroidrunPortalTools: XCTestCase {
         // Tap the element to focus it
         try tapElement(rect: rect, count: 1, longPress: false)
 
+        // Wait for focus — acquisition is asynchronous in XCTest
         let focusedElement = app.descendants(matching: .any)
             .matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
+        if !focusedElement.exists {
+            _ = focusedElement.waitForExistence(timeout: 2)
+        }
         guard focusedElement.exists else {
             throw Error.invalidTool(name: "clearText", message: "No element has keyboard focus after tapping.")
         }
@@ -336,13 +339,11 @@ final class DroidrunPortalTools: XCTestCase {
     
     @MainActor
     func getScreenSize() throws -> ScreenSizeResponse {
-        if let cached = cachedScreenSize {
-            return cached
+        guard let app else {
+            throw Error.noAppFound
         }
-        let size = XCUIScreen.main.screenshot().image.size
-        let response = ScreenSizeResponse(width: size.width, height: size.height)
-        cachedScreenSize = response
-        return response
+        let frame = app.windows.element(boundBy: 0).frame
+        return ScreenSizeResponse(width: frame.width, height: frame.height)
     }
 
     func getDate() -> String {
