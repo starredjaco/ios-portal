@@ -40,10 +40,16 @@ extension DroidrunPortalTools {
     }
 }
 
+struct FocusedElement: Codable {
+    let text: String
+    let className: String
+    let resourceId: String
+}
+
 struct PhoneState: Codable {
     let activity: String
     let keyboardShown: Bool
-    let focusedElement: String?
+    let focusedElement: FocusedElement?
 }
 
 // tools
@@ -79,20 +85,20 @@ final class DroidrunPortalTools: XCTestCase {
         
         let keyboardShown = app.keyboards.element.exists && app.keyboards.element.isHittable
         
-        // Find the focused element and get its label or identifier
+        // Find the focused element and expose its current value in a structured form.
         let focusedElement = app.descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
-        var focusedElementDescription: String? = nil
+        var focusedElementState: FocusedElement? = nil
         if focusedElement.exists {
-            if !focusedElement.label.isEmpty {
-                focusedElementDescription = focusedElement.label
-            } else if !focusedElement.identifier.isEmpty {
-                focusedElementDescription = focusedElement.identifier
-            } else {
-                focusedElementDescription = String(describing: focusedElement)
-            }
+            let rawValue = focusedElement.value as? String ?? ""
+            let value = rawValue == focusedElement.placeholderValue ? "" : rawValue
+            focusedElementState = FocusedElement(
+                text: value,
+                className: String(describing: focusedElement.elementType),
+                resourceId: focusedElement.identifier
+            )
         }
         
-        return PhoneState(activity: activity, keyboardShown: keyboardShown, focusedElement: focusedElementDescription)
+        return PhoneState(activity: activity, keyboardShown: keyboardShown, focusedElement: focusedElementState)
     }
     
     @MainActor
