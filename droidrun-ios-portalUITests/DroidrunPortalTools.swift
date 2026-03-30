@@ -11,9 +11,9 @@ import XCTest
 extension XCUIDevice.Button {
     init?(rawValue: Int) {
         switch rawValue {
-        case 0: self = .home
-            //case 1: self = .volumeUp
-            //case 2: self = .volumeDown
+        case 1: self = .home
+        case 2: self = .volumeUp
+        case 3: self = .volumeDown
         case 4: self = .action
         case 5: self = .camera
         default: return nil
@@ -26,7 +26,7 @@ extension DroidrunPortalTools {
         case invalidTool(name: String?, message: String)
         case noAppFound
         case apiNotConfigured
-        
+
         var errorDescription: String? {
             switch self {
             case .invalidTool(let name, let message):
@@ -65,13 +65,13 @@ final class DroidrunPortalTools: XCTestCase {
         self.app?.activate()
         print("reset to homescreen")
     }
-    
+
     @MainActor
     func fetchPhoneState() throws -> PhoneState {
         guard let app else {
             return PhoneState(activity: "most likely apple springboard", keyboardShown: false, focusedElement: nil)
         }
-        
+
         var activity = self.bundleIdentifier ?? "unknown"
         let navBar = app.navigationBars.firstMatch
         if navBar.exists,
@@ -82,44 +82,105 @@ final class DroidrunPortalTools: XCTestCase {
         if label.exists, !label.label.isEmpty {
             activity += " - \(label.label)"
         }
-        
+
         let keyboardShown = app.keyboards.element.exists && app.keyboards.element.isHittable
-        
-        // Find the focused element and expose its current value in a structured form.
-        let focusedElement = app.descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
-        var focusedElementState: FocusedElement? = nil
-        if focusedElement.exists {
-            let rawValue = focusedElement.value as? String ?? ""
-            let value = rawValue == focusedElement.placeholderValue ? "" : rawValue
-            focusedElementState = FocusedElement(
-                text: value,
-                className: String(describing: focusedElement.elementType),
-                resourceId: focusedElement.identifier
-            )
-        }
-        
+
+        let focusedElementState = findFocusedElement()
+
         return PhoneState(activity: activity, keyboardShown: keyboardShown, focusedElement: focusedElementState)
     }
-    
+
+    @MainActor
+    func fetchStateFull() throws -> StateFullResponse {
+        let a11yTree = try fetchAccessibilityTree()
+        let screenSize = try getScreenSize()
+
+        guard let app else {
+            return StateFullResponse(
+                a11y_tree: a11yTree,
+                phone_state: StateFullPhoneState(
+                    currentApp: "",
+                    packageName: "",
+                    keyboardVisible: false,
+                    isEditable: false,
+                    focusedElement: nil
+                ),
+                device_context: DeviceContext(
+                    screen_bounds: ScreenBounds(width: screenSize.width, height: screenSize.height)
+                )
+            )
+        }
+
+        // Build currentApp from nav bar title / first static text (best-effort context)
+        var currentApp = ""
+        let navBar = app.navigationBars.firstMatch
+        if navBar.exists, !navBar.identifier.isEmpty {
+            currentApp = navBar.identifier
+        }
+        let label = app.staticTexts.firstMatch
+        if label.exists, !label.label.isEmpty {
+            if !currentApp.isEmpty { currentApp += " - " }
+            currentApp += label.label
+        }
+
+        let keyboardVisible = app.keyboards.element.exists && app.keyboards.element.isHittable
+
+        let focusedElementState = findFocusedElement()
+
+        // isEditable: true if focused element is a text input type
+        let editableTypes: Set<String> = ["TextField", "SecureTextField", "TextView", "SearchField"]
+        let isEditable = focusedElementState != nil && editableTypes.contains(focusedElementState!.className)
+
+        return StateFullResponse(
+            a11y_tree: a11yTree,
+            phone_state: StateFullPhoneState(
+                currentApp: currentApp,
+                packageName: "",
+                keyboardVisible: keyboardVisible,
+                isEditable: isEditable,
+                focusedElement: focusedElementState
+            ),
+            device_context: DeviceContext(
+                screen_bounds: ScreenBounds(width: screenSize.width, height: screenSize.height)
+            )
+        )
+    }
+
+    @MainActor
+    private func findFocusedElement() -> FocusedElement? {
+        guard let app else { return nil }
+        let focused = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
+        guard focused.exists else { return nil }
+
+        let rawValue = focused.value as? String ?? ""
+        let value = rawValue == focused.placeholderValue ? "" : rawValue
+        return FocusedElement(
+            text: value,
+            className: String(describing: focused.elementType),
+            resourceId: focused.identifier
+        )
+    }
+
     @MainActor
     func openApp(bundleIdentifier: String) throws {
         if bundleIdentifier == self.bundleIdentifier, app != nil {
             app?.activate()
             return
         }
-        
+
         let app = XCUIApplication(bundleIdentifier: bundleIdentifier)
-        
+
         if bundleIdentifier == "com.apple.springboard" {
             app.activate() // Avoid relaunching springboard since that locks the phone
         } else {
             app.launch()
         }
-        
+
         self.bundleIdentifier = bundleIdentifier
         self.app = app
     }
-    
+
     // TODO: vibecoded. this only shows bundle identifiers of apps launched in the testing session
     @MainActor
     func listApps() -> [String] {
@@ -127,24 +188,16 @@ final class DroidrunPortalTools: XCTestCase {
             .filter { $0.hasPrefix("DYLD_INSERT_ID_") }
             .map { String($0.dropFirst("DYLD_INSERT_ID_".count)) }
     }
-    
+
     @MainActor
     func fetchAccessibilityTree() throws -> String {
         guard let app else {
             throw Error.noAppFound
         }
-        
+
         return app.accessibilityTree()
     }
 
-    @MainActor
-    func fetchAccessibilityClickables() throws -> [AccessibilityTreeClickables.Node] {
-        guard let app else {
-            throw Error.noAppFound
-        }
-        return app.accessibilityClickables()
-    }
-    
     @MainActor
     func tapElement(rect coordinateString: String, count: Int?, longPress: Bool?) throws {
         print("Tap \(coordinateString) \(count ?? 1) times long: \(longPress ?? false)")
@@ -165,7 +218,7 @@ final class DroidrunPortalTools: XCTestCase {
             }
         }
     }
-    
+
     @MainActor
     func swipe(x1: CGFloat, y1: CGFloat, x2: CGFloat, y2: CGFloat, duration: Double) throws {
         print("Swipe from (\(x1),\(y1)) to (\(x2),\(y2)) duration: \(duration)s")
@@ -177,17 +230,19 @@ final class DroidrunPortalTools: XCTestCase {
         let end = root.withOffset(CGVector(dx: x2, dy: y2))
         start.press(forDuration: duration, thenDragTo: end)
     }
-    
+
     @MainActor
     @discardableResult
-    func clearText(rect: String, timeout: TimeInterval = 30) throws -> ClearResponse {
-        print("Clear text \(rect) timeout: \(timeout)s")
+    func clearText(rect: String? = nil, timeout: TimeInterval = 30) throws -> ClearResponse {
+        print("Clear text \(rect ?? "<focused>") timeout: \(timeout)s")
         guard let app else {
             throw Error.noAppFound
         }
 
-        // Tap the element to focus it
-        try tapElement(rect: rect, count: 1, longPress: false)
+        // If rect provided, tap to focus; otherwise assume already focused
+        if let rect {
+            try tapElement(rect: rect, count: 1, longPress: false)
+        }
 
         // Wait for focus — acquisition is asynchronous in XCTest
         let focusedElement = app.descendants(matching: .any)
@@ -196,7 +251,7 @@ final class DroidrunPortalTools: XCTestCase {
             _ = focusedElement.waitForExistence(timeout: 2)
         }
         guard focusedElement.exists else {
-            throw Error.invalidTool(name: "clearText", message: "No element has keyboard focus after tapping.")
+            throw Error.invalidTool(name: "clearText", message: "No element has keyboard focus.")
         }
 
         let startTime = CFAbsoluteTimeGetCurrent()
@@ -264,85 +319,49 @@ final class DroidrunPortalTools: XCTestCase {
     }
 
     @MainActor
-    func enterText(rect: String, text: String) async throws {
-        print("Enter Text \(rect) -> \(text)")
+    func enterText(rect: String? = nil, text: String) async throws {
+        print("Enter Text \(rect ?? "<focused>") -> \(text.prefix(50))... (\(text.count) chars)")
         guard let app else {
             throw Error.noAppFound
         }
-        try tapElement(rect: rect, count: 1, longPress: false)
 
-        // Check for focused element — works with both software and hardware keyboard
-        let focusedElement = app.descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
-
-        // If no focus yet, wait a moment and check again
-        if !focusedElement.exists {
-            _ = focusedElement.waitForExistence(timeout: 2)
-        }
-        guard focusedElement.exists else {
-            throw Error.invalidTool(name: "enterText", message: "No element has keyboard focus after tapping.")
+        // If rect provided, tap to focus; otherwise assume already focused
+        if let rect {
+            try tapElement(rect: rect, count: 1, longPress: false)
         }
 
-        app.typeText(text)
-    }
-
-    @MainActor
-    func enterText(_ text: String) throws {
-        guard let app = self.app else {
-            throw Error.noAppFound
+        // Verify something is focused
+        let focused = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
+        if !focused.exists {
+            _ = focused.waitForExistence(timeout: 2)
         }
-        print("Typing text into focused element: \(text.prefix(50))... (\(text.count) chars)")
+        guard focused.exists else {
+            throw Error.invalidTool(name: "enterText", message: "No element has keyboard focus.")
+        }
+
         // Chunk long text to avoid XCTest assertion failures from stale element references
         let chunkSize = 100
         var offset = text.startIndex
         while offset < text.endIndex {
             let end = text.index(offset, offsetBy: chunkSize, limitedBy: text.endIndex) ?? text.endIndex
-            let chunk = String(text[offset..<end])
-            app.typeText(chunk)
+            app.typeText(String(text[offset..<end]))
             offset = end
         }
     }
-    
+
     @MainActor
     func pressKey(key: XCUIDevice.Button) throws {
         print("Press Key \(key)")
         XCUIDevice.shared.press(key)
     }
-    
-    @MainActor
-    func pressKeycode(_ keycode: Int) throws {
-        // Map keycodes to iOS representations
-        let keyMap: [Int: String] = [
-            66: "\n",      // Enter/Return
-            67: "\u{8}",   // Delete/Backspace
-            61: "\t"       // Tab
-        ]
-        guard let keyString = keyMap[keycode] else {
-            throw Error.invalidTool(name: "pressKeycode", message: "Unsupported keycode: \(keycode)")
-        }
-        guard let app = self.app else {
-            throw Error.noAppFound
-        }
-        // Find the focused element
-        let focusedElement = app.descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
-        guard focusedElement.exists else {
-            throw Error.invalidTool(name: "pressKeycode", message: "No element has keyboard focus.")
-        }
-        print("Typing key for keycode \(keycode): \(keyString)")
-        focusedElement.typeText(keyString)
-    }
-    
+
     @MainActor
     func takeScreenshot() throws -> Data {
         let snapshot = XCUIScreen.main.screenshot()
-        
-        /*guard let app else {
-         throw Error.noAppFound
-         }
-         let snapshot = app.screenshot()*/
-        
         return snapshot.pngRepresentation
     }
-    
+
     @MainActor
     func getScreenSize() throws -> ScreenSizeResponse {
         guard let app else {

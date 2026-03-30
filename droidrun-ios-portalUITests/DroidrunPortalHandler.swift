@@ -17,10 +17,6 @@ struct A11yResponse: Encodable {
     let accessibilityTree: String
 }
 
-struct ClickablesResponse: Encodable {
-    let nodes: [AccessibilityTreeClickables.Node]
-}
-
 struct AppsResponse: Encodable {
     let apps: [String]
 }
@@ -52,13 +48,13 @@ struct GestureResponse: Encodable {
 }
 
 struct TypeBody: Decodable {
-    let rect: String
+    let rect: String?
     let text: String
     let clear: Bool?
 }
 
 struct ClearBody: Decodable {
-    let rect: String
+    let rect: String?
 }
 
 struct ClearResponse: Encodable {
@@ -66,10 +62,6 @@ struct ClearResponse: Encodable {
     let charactersDeleted: Int
     let method: String
     let durationMs: Double
-}
-
-struct TypeFocusedBody: Decodable {
-    let text: String
 }
 
 struct KeyBody: Decodable {
@@ -85,30 +77,54 @@ struct DateResponse: Encodable {
     let date: String
 }
 
+// -- /state_full response types -----------------------------------------------
+
+struct ScreenBounds: Encodable {
+    let width: CGFloat
+    let height: CGFloat
+}
+
+struct DeviceContext: Encodable {
+    let screen_bounds: ScreenBounds
+}
+
+struct StateFullPhoneState: Encodable {
+    let currentApp: String
+    let packageName: String
+    let keyboardVisible: Bool
+    let isEditable: Bool
+    let focusedElement: FocusedElement?
+}
+
+struct StateFullResponse: Encodable {
+    let a11y_tree: String
+    let phone_state: StateFullPhoneState
+    let device_context: DeviceContext
+}
+
 @HTTPHandler
 struct DroidrunPortalHandler {
-    
+
     @JSONRoute("GET /")
     func info() throws -> InfoResponse {
         let description = XCUIDevice.shared.description
         return InfoResponse(description: description)
     }
-    
+
+    @JSONRoute("GET /state_full")
+    func stateFull() async throws -> StateFullResponse {
+        return try await DroidrunPortalTools.shared.fetchStateFull()
+    }
+
     @JSONRoute("GET /vision/state")
     func fetchPhoneState() async throws -> PhoneState {
         return try await DroidrunPortalTools.shared.fetchPhoneState()
     }
-    
+
     @JSONRoute("GET /vision/a11y")
     func fetchAccessibilityTree() async throws -> A11yResponse {
         let a11y = try await DroidrunPortalTools.shared.fetchAccessibilityTree()
         return A11yResponse(accessibilityTree: a11y)
-    }
-
-    @JSONRoute("GET /vision/clickables")
-    func fetchAccessibilityClickables() async throws -> ClickablesResponse {
-        let nodes = try await DroidrunPortalTools.shared.fetchAccessibilityClickables()
-        return ClickablesResponse(nodes: nodes)
     }
 
     @JSONRoute("GET /vision/apps")
@@ -116,32 +132,32 @@ struct DroidrunPortalHandler {
         let apps = await DroidrunPortalTools.shared.listApps()
         return AppsResponse(apps: apps)
     }
-    
+
     @HTTPRoute("GET /vision/screenshot")
     func takeScreenshot() async throws -> HTTPResponse {
         let screenshot = try await DroidrunPortalTools.shared.takeScreenshot()
         return HTTPResponse(statusCode: .ok, headers: [.contentType: "image/png"], body: screenshot)
     }
-    
+
     @JSONRoute("POST /inputs/launch")
     func launchApp(_ body: LaunchAppBody) async throws -> LaunchAppResponse {
         try await DroidrunPortalTools.shared.openApp(bundleIdentifier: body.bundleIdentifier)
         return LaunchAppResponse(message: "opened \(body.bundleIdentifier)")
     }
-    
+
     @JSONRoute("POST /gestures/tap")
     func tapElement(_ body: TapBody) async throws -> GestureResponse {
         try await DroidrunPortalTools.shared.tapElement(rect: body.rect, count: body.count, longPress: body.longPress)
         return GestureResponse(message: "tapped element")
     }
-    
+
     @JSONRoute("POST /gestures/swipe")
     func swipe(_ body: SwipeBody) async throws -> GestureResponse {
         let durationSec = (body.durationMs ?? 300) / 1000.0
         try await DroidrunPortalTools.shared.swipe(x1: body.x1, y1: body.y1, x2: body.x2, y2: body.y2, duration: durationSec)
         return GestureResponse(message: "swiped")
     }
-    
+
     @JSONRoute("POST /inputs/type")
     func enterText(_ body: TypeBody) async throws -> GestureResponse {
         if body.clear == true {
@@ -156,19 +172,13 @@ struct DroidrunPortalHandler {
         let result = try await DroidrunPortalTools.shared.clearText(rect: body.rect)
         return result
     }
-    
-    @JSONRoute("POST /inputs/type_focused")
-    func enterTextFocused(_ body: TypeFocusedBody) async throws -> GestureResponse {
-        try await DroidrunPortalTools.shared.enterText(body.text)
-        return GestureResponse(message: "entered text")
-    }
 
     @JSONRoute("POST /inputs/key")
     func pressKey(_ body: KeyBody) async throws -> GestureResponse {
         guard let key = XCUIDevice.Button(rawValue: body.key) else {
             throw HTTPUnhandledError()
         }
-        
+
         try await DroidrunPortalTools.shared.pressKey(key: key)
         return GestureResponse(message: "pressed key")
     }
