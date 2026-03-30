@@ -12,8 +12,10 @@ extension XCUIDevice.Button {
     init?(rawValue: Int) {
         switch rawValue {
         case 1: self = .home
+        #if !targetEnvironment(simulator)
         case 2: self = .volumeUp
         case 3: self = .volumeDown
+        #endif
         case 4: self = .action
         case 5: self = .camera
         default: return nil
@@ -25,7 +27,6 @@ extension DroidrunPortalTools {
     enum Error: Swift.Error, LocalizedError {
         case invalidTool(name: String?, message: String)
         case noAppFound
-        case apiNotConfigured
 
         var errorDescription: String? {
             switch self {
@@ -33,8 +34,6 @@ extension DroidrunPortalTools {
                 "Invalid tool \(name ?? "unknown"): \(message)"
             case .noAppFound:
                 "No app found to interact with, try to open an app first."
-            case .apiNotConfigured:
-                "No API key found"
             }
         }
     }
@@ -46,13 +45,6 @@ struct FocusedElement: Codable {
     let resourceId: String
 }
 
-struct PhoneState: Codable {
-    let activity: String
-    let keyboardShown: Bool
-    let focusedElement: FocusedElement?
-}
-
-// tools
 final class DroidrunPortalTools: XCTestCase {
     var app: XCUIApplication?
     var bundleIdentifier: String?
@@ -66,34 +58,11 @@ final class DroidrunPortalTools: XCTestCase {
         print("reset to homescreen")
     }
 
-    @MainActor
-    func fetchPhoneState() throws -> PhoneState {
-        guard let app else {
-            return PhoneState(activity: "most likely apple springboard", keyboardShown: false, focusedElement: nil)
-        }
-
-        var activity = self.bundleIdentifier ?? "unknown"
-        let navBar = app.navigationBars.firstMatch
-        if navBar.exists,
-           !navBar.identifier.isEmpty {
-            activity += " - \(navBar.identifier)"
-        }
-        let label = app.staticTexts.firstMatch
-        if label.exists, !label.label.isEmpty {
-            activity += " - \(label.label)"
-        }
-
-        let keyboardShown = app.keyboards.element.exists && app.keyboards.element.isHittable
-
-        let focusedElementState = findFocusedElement()
-
-        return PhoneState(activity: activity, keyboardShown: keyboardShown, focusedElement: focusedElementState)
-    }
+    // MARK: - State
 
     @MainActor
     func fetchStateFull() throws -> StateFullResponse {
         let a11yTree = try fetchAccessibilityTree()
-        let screenSize = try getScreenSize()
 
         guard let app else {
             return StateFullResponse(
@@ -106,12 +75,14 @@ final class DroidrunPortalTools: XCTestCase {
                     focusedElement: nil
                 ),
                 device_context: DeviceContext(
-                    screen_bounds: ScreenBounds(width: screenSize.width, height: screenSize.height)
+                    screen_bounds: ScreenBounds(width: 0, height: 0)
                 )
             )
         }
 
-        // Build currentApp from nav bar title / first static text (best-effort context)
+        let frame = app.windows.element(boundBy: 0).frame
+
+        // Build currentApp from nav bar title / first static text
         var currentApp = ""
         let navBar = app.navigationBars.firstMatch
         if navBar.exists, !navBar.identifier.isEmpty {
@@ -127,7 +98,6 @@ final class DroidrunPortalTools: XCTestCase {
 
         let focusedElementState = findFocusedElement()
 
-        // isEditable: true if focused element is a text input type
         let editableTypes: Set<String> = ["TextField", "SecureTextField", "TextView", "SearchField"]
         let isEditable = focusedElementState != nil && editableTypes.contains(focusedElementState!.className)
 
@@ -141,7 +111,7 @@ final class DroidrunPortalTools: XCTestCase {
                 focusedElement: focusedElementState
             ),
             device_context: DeviceContext(
-                screen_bounds: ScreenBounds(width: screenSize.width, height: screenSize.height)
+                screen_bounds: ScreenBounds(width: frame.width, height: frame.height)
             )
         )
     }
@@ -157,10 +127,31 @@ final class DroidrunPortalTools: XCTestCase {
         let value = rawValue == focused.placeholderValue ? "" : rawValue
         return FocusedElement(
             text: value,
-            className: String(describing: focused.elementType),
+            className: Self.elementTypeName(focused.elementType),
             resourceId: focused.identifier
         )
     }
+
+    private static func elementTypeName(_ type: XCUIElement.ElementType) -> String {
+        switch type {
+        case .textField:       return "TextField"
+        case .secureTextField: return "SecureTextField"
+        case .textView:        return "TextView"
+        case .searchField:     return "SearchField"
+        case .button:          return "Button"
+        case .staticText:      return "StaticText"
+        case .image:           return "Image"
+        case .cell:            return "Cell"
+        case .switch:          return "Switch"
+        case .slider:          return "Slider"
+        case .picker:          return "Picker"
+        case .link:            return "Link"
+        case .webView:         return "WebView"
+        default:               return "Other(\(type.rawValue))"
+        }
+    }
+
+    // MARK: - App management
 
     @MainActor
     func openApp(bundleIdentifier: String) throws {
@@ -181,22 +172,17 @@ final class DroidrunPortalTools: XCTestCase {
         self.app = app
     }
 
-    // TODO: vibecoded. this only shows bundle identifiers of apps launched in the testing session
-    @MainActor
-    func listApps() -> [String] {
-        return ProcessInfo.processInfo.environment.keys
-            .filter { $0.hasPrefix("DYLD_INSERT_ID_") }
-            .map { String($0.dropFirst("DYLD_INSERT_ID_".count)) }
-    }
+    // MARK: - Accessibility
 
     @MainActor
     func fetchAccessibilityTree() throws -> String {
         guard let app else {
             throw Error.noAppFound
         }
-
         return app.accessibilityTree()
     }
+
+    // MARK: - Gestures
 
     @MainActor
     func tapElement(rect coordinateString: String, count: Int?, longPress: Bool?) throws {
@@ -231,6 +217,8 @@ final class DroidrunPortalTools: XCTestCase {
         start.press(forDuration: duration, thenDragTo: end)
     }
 
+    // MARK: - Text input
+
     @MainActor
     @discardableResult
     func clearText(rect: String? = nil, timeout: TimeInterval = 30) throws -> ClearResponse {
@@ -239,12 +227,10 @@ final class DroidrunPortalTools: XCTestCase {
             throw Error.noAppFound
         }
 
-        // If rect provided, tap to focus; otherwise assume already focused
         if let rect {
             try tapElement(rect: rect, count: 1, longPress: false)
         }
 
-        // Wait for focus — acquisition is asynchronous in XCTest
         let focusedElement = app.descendants(matching: .any)
             .matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
         if !focusedElement.exists {
@@ -258,51 +244,45 @@ final class DroidrunPortalTools: XCTestCase {
         var totalDeleted = 0
 
         while true {
-            // Check timeout
             let elapsed = CFAbsoluteTimeGetCurrent() - startTime
             if elapsed > timeout {
                 print("Clear timed out after \(String(format: "%.1f", elapsed))s")
                 break
             }
 
-            // Read current value
             let currentValue = focusedElement.value as? String ?? ""
             if currentValue.isEmpty || currentValue == focusedElement.placeholderValue {
-                break  // Done
+                break
             }
 
             let countBefore = currentValue.count
 
-            // Fast pass: tap bottom-right, bulk delete
             let endCoordinate = focusedElement.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.99))
             endCoordinate.tap()
             let deleteString = String(repeating: XCUIKeyboardKey.delete.rawValue, count: countBefore)
             app.typeText(deleteString)
 
-            // Check if fast pass made progress
             let afterFast = focusedElement.value as? String ?? ""
             if afterFast.isEmpty || afterFast == focusedElement.placeholderValue {
                 totalDeleted += countBefore
-                break  // Done
+                break
             }
 
             let deletedThisPass = countBefore - afterFast.count
             if deletedThisPass > 0 {
                 totalDeleted += deletedThisPass
-                continue  // Fast pass made progress, loop back for another
+                continue
             }
 
-            // Fast pass made no progress — try one single delete (reliable)
             app.typeText(XCUIKeyboardKey.delete.rawValue)
             let afterSingle = focusedElement.value as? String ?? ""
             let singleProgress = afterFast.count - afterSingle.count
 
             if singleProgress > 0 {
                 totalDeleted += singleProgress
-                continue  // Single delete worked, loop back to try fast again
+                continue
             }
 
-            // Neither fast nor single delete made progress — give up
             print("No progress after fast + single delete, stopping")
             break
         }
@@ -325,12 +305,10 @@ final class DroidrunPortalTools: XCTestCase {
             throw Error.noAppFound
         }
 
-        // If rect provided, tap to focus; otherwise assume already focused
         if let rect {
             try tapElement(rect: rect, count: 1, longPress: false)
         }
 
-        // Verify something is focused
         let focused = app.descendants(matching: .any)
             .matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
         if !focused.exists {
@@ -340,7 +318,6 @@ final class DroidrunPortalTools: XCTestCase {
             throw Error.invalidTool(name: "enterText", message: "No element has keyboard focus.")
         }
 
-        // Chunk long text to avoid XCTest assertion failures from stale element references
         let chunkSize = 100
         var offset = text.startIndex
         while offset < text.endIndex {
@@ -349,6 +326,8 @@ final class DroidrunPortalTools: XCTestCase {
             offset = end
         }
     }
+
+    // MARK: - Device
 
     @MainActor
     func pressKey(key: XCUIDevice.Button) throws {
@@ -362,15 +341,6 @@ final class DroidrunPortalTools: XCTestCase {
         return snapshot.pngRepresentation
     }
 
-    @MainActor
-    func getScreenSize() throws -> ScreenSizeResponse {
-        guard let app else {
-            throw Error.noAppFound
-        }
-        let frame = app.windows.element(boundBy: 0).frame
-        return ScreenSizeResponse(width: frame.width, height: frame.height)
-    }
-
     func getDate() -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -382,14 +352,12 @@ final class DroidrunPortalTools: XCTestCase {
         guard let app = self.app else {
             throw Error.noAppFound
         }
-        // Try to tap the navigation bar back button
         let backButton = app.navigationBars.buttons.element(boundBy: 0)
         if backButton.exists && backButton.isHittable {
             print("Tapping navigation bar back button")
             backButton.tap()
             return
         }
-        // If not, try a right-edge swipe gesture (from left edge to right)
         let window = app.windows.element(boundBy: 0)
         if window.exists {
             let start = window.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))

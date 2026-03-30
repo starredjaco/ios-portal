@@ -13,14 +13,6 @@ struct InfoResponse: Encodable {
     let description: String
 }
 
-struct A11yResponse: Encodable {
-    let accessibilityTree: String
-}
-
-struct AppsResponse: Encodable {
-    let apps: [String]
-}
-
 struct LaunchAppBody: Decodable {
     let bundleIdentifier: String
 }
@@ -68,11 +60,6 @@ struct KeyBody: Decodable {
     let key: Int
 }
 
-struct ScreenSizeResponse: Encodable {
-    let width: CGFloat
-    let height: CGFloat
-}
-
 struct DateResponse: Encodable {
     let date: String
 }
@@ -114,23 +101,6 @@ struct DroidrunPortalHandler {
     @JSONRoute("GET /state_full")
     func stateFull() async throws -> StateFullResponse {
         return try await DroidrunPortalTools.shared.fetchStateFull()
-    }
-
-    @JSONRoute("GET /vision/state")
-    func fetchPhoneState() async throws -> PhoneState {
-        return try await DroidrunPortalTools.shared.fetchPhoneState()
-    }
-
-    @JSONRoute("GET /vision/a11y")
-    func fetchAccessibilityTree() async throws -> A11yResponse {
-        let a11y = try await DroidrunPortalTools.shared.fetchAccessibilityTree()
-        return A11yResponse(accessibilityTree: a11y)
-    }
-
-    @JSONRoute("GET /vision/apps")
-    func fetchApps() async throws -> AppsResponse {
-        let apps = await DroidrunPortalTools.shared.listApps()
-        return AppsResponse(apps: apps)
     }
 
     @HTTPRoute("GET /vision/screenshot")
@@ -187,11 +157,6 @@ struct DroidrunPortalHandler {
     func back() async throws -> GestureResponse {
         try await DroidrunPortalTools.shared.back()
         return GestureResponse(message: "navigated back")
-    }
-
-    @JSONRoute("GET /device/screen")
-    func screenSize() async throws -> ScreenSizeResponse {
-        return try await DroidrunPortalTools.shared.getScreenSize()
     }
 
     @JSONRoute("GET /device/date")
