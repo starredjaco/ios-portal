@@ -64,7 +64,7 @@ struct DateResponse: Encodable {
     let date: String
 }
 
-// -- /state_full response types -----------------------------------------------
+// -- /state response types ----------------------------------------------------
 
 struct ScreenBounds: Encodable {
     let width: CGFloat
@@ -98,7 +98,7 @@ struct DroidrunPortalHandler {
         return InfoResponse(description: description)
     }
 
-    @JSONRoute("GET /state_full")
+    @JSONRoute("GET /state")
     func stateFull() async throws -> StateFullResponse {
         return try await DroidrunPortalTools.shared.fetchStateFull()
     }
