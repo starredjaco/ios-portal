@@ -1,0 +1,59 @@
+{
+  "configurations" : [
+    {
+      "id" : "565C45A4-D243-4B2E-9BC6-B3D18F78E7CE",
+      "name" : "Test Scheme Action",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "performanceAntipatternCheckerEnabled" : true,
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:droidrun-ios-portal.xcodeproj",
+      "identifier" : "257BF6C62DEF0D2800E06EE1",
+      "name" : "Droidrun Portal"
+    }
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : true,
+      "target" : {
+        "containerPath" : "container:droidrun-ios-portal.xcodeproj",
+        "identifier" : "257BF6D32DEF0D2A00E06EE1",
+        "name" : "droidrun-ios-portalTests"
+      }
+    },
+    {
+      "parallelizable" : true,
+      "target" : {
+        "containerPath" : "container:droidrun-ios-portal.xcodeproj",
+        "identifier" : "257BF6DD2DEF0D2A00E06EE1",
+        "name" : "Droidrun Server"
+      }
+    },
+    {
+      "target" : {
+        "containerPath" : "container:droidrun-ios-portal.xcodeproj",
+        "identifier" : "257BF6DD2DEF0D2A00E06EE1",
+        "name" : "Droidrun Server"
+      }
+    },
+    {
+      "target" : {
+        "containerPath" : "container:droidrun-ios-portal.xcodeproj",
+        "identifier" : "257BF6DD2DEF0D2A00E06EE1",
+        "name" : "Droidrun Server"
+      }
+    },
+    {
+      "target" : {
+        "containerPath" : "container:droidrun-ios-portal.xcodeproj",
+        "identifier" : "257BF6DD2DEF0D2A00E06EE1",
+        "name" : "Droidrun Server"
+      }
+    }
+  ],
+  "version" : 1
+}
