@@ -58,43 +58,114 @@ final class DroidrunPortalTools: XCTestCase {
         print("reset to homescreen")
     }
 
+    private func looksLikeClock(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let pattern = #"^\d{1,2}:\d{2}$"#
+        return trimmed.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    @MainActor
+    private func currentPackageName() -> String {
+        if bundleIdentifier == "com.apple.springboard" {
+            return "com.apple.springboard"
+        }
+        return bundleIdentifier ?? ""
+    }
+
+    @MainActor
+    private func currentAppName() -> String {
+        guard let app else {
+            return ""
+        }
+
+        if bundleIdentifier == "com.apple.springboard" {
+            return "Home Screen"
+        }
+
+        // Guard accessibility queries — if the app window isn't reachable
+        // there's no point querying nav bars or labels.
+        let window = app.windows.element(boundBy: 0)
+        guard window.waitForExistence(timeout: 2) else {
+            return bundleIdentifier ?? ""
+        }
+
+        let navBar = app.navigationBars.firstMatch
+        if navBar.exists, !navBar.identifier.isEmpty, !looksLikeClock(navBar.identifier) {
+            return navBar.identifier
+        }
+
+        let label = app.staticTexts.firstMatch
+        if label.exists, !label.label.isEmpty, !looksLikeClock(label.label) {
+            return label.label
+        }
+
+        return ""
+    }
+
+    private func fallbackScreenBounds() -> CGRect {
+        CGRect(x: 0, y: 0, width: 430, height: 932)
+    }
+
     // MARK: - State
 
     @MainActor
     func fetchStateFull() throws -> StateFullResponse {
-        let a11yTree = try fetchAccessibilityTree()
-
         guard let app else {
+            let screen = fallbackScreenBounds()
             return StateFullResponse(
-                a11y_tree: a11yTree,
+                a11y_tree: "",
                 phone_state: StateFullPhoneState(
-                    currentApp: "",
+                    currentApp: "Unknown",
                     packageName: "",
                     keyboardVisible: false,
                     isEditable: false,
                     focusedElement: nil
                 ),
                 device_context: DeviceContext(
-                    screen_bounds: ScreenBounds(width: 0, height: 0)
+                    screen_bounds: ScreenBounds(width: screen.width, height: screen.height)
                 )
             )
         }
 
-        let frame = app.windows.element(boundBy: 0).frame
-
-        // Build currentApp from nav bar title / first static text
-        var currentApp = ""
-        let navBar = app.navigationBars.firstMatch
-        if navBar.exists, !navBar.identifier.isEmpty {
-            currentApp = navBar.identifier
+        let a11yTree: String
+        do {
+            a11yTree = try fetchAccessibilityTree()
+        } catch {
+            let screen = fallbackScreenBounds()
+            return StateFullResponse(
+                a11y_tree: "",
+                phone_state: StateFullPhoneState(
+                    currentApp: currentAppName(),
+                    packageName: currentPackageName(),
+                    keyboardVisible: false,
+                    isEditable: false,
+                    focusedElement: nil
+                ),
+                device_context: DeviceContext(
+                    screen_bounds: ScreenBounds(width: screen.width, height: screen.height)
+                )
+            )
         }
-        let label = app.staticTexts.firstMatch
-        if label.exists, !label.label.isEmpty {
-            if !currentApp.isEmpty { currentApp += " - " }
-            currentApp += label.label
+
+        // Guard window frame query — this is the main source of
+        // kAXErrorServerNotFound failures that accumulate and eventually
+        // cause xcodebuild to kill the test runner.
+        let window = app.windows.element(boundBy: 0)
+        var frame = fallbackScreenBounds()
+        if window.waitForExistence(timeout: 3) {
+            let wf = window.frame
+            if wf.width > 0 && wf.height > 0 {
+                frame = wf
+            }
         }
 
-        let keyboardVisible = app.keyboards.element.exists && app.keyboards.element.isHittable
+        let currentApp = currentAppName()
+
+        // Guard keyboard queries — .exists and .isHittable can also
+        // trigger accessibility failures on slow transitions.
+        let kbd = app.keyboards.element
+        let keyboardVisible = kbd.exists && kbd.isHittable
 
         let focusedElementState = findFocusedElement()
 
@@ -105,7 +176,7 @@ final class DroidrunPortalTools: XCTestCase {
             a11y_tree: a11yTree,
             phone_state: StateFullPhoneState(
                 currentApp: currentApp,
-                packageName: "",
+                packageName: currentPackageName(),
                 keyboardVisible: keyboardVisible,
                 isEditable: isEditable,
                 focusedElement: focusedElementState
@@ -179,6 +250,20 @@ final class DroidrunPortalTools: XCTestCase {
         guard let app else {
             throw Error.noAppFound
         }
+
+        // Guard: if the app window doesn't appear within 10s the
+        // accessibility server is likely unreachable (app transitioning,
+        // loading, etc.).  waitForExistence does NOT record an XCTest
+        // failure, so bailing here avoids the kAXErrorServerNotFound
+        // accumulation that eventually kills the test runner.
+        let window = app.windows.element(boundBy: 0)
+        if !window.waitForExistence(timeout: 10) {
+            throw Error.invalidTool(
+                name: "fetchAccessibilityTree",
+                message: "App window not available after 10s — the app may be loading or transitioning."
+            )
+        }
+
         return app.accessibilityTree()
     }
 
@@ -221,7 +306,7 @@ final class DroidrunPortalTools: XCTestCase {
 
     @MainActor
     @discardableResult
-    func clearText(rect: String? = nil, timeout: TimeInterval = 30) throws -> ClearResponse {
+    private func clearText(rect: String? = nil, timeout: TimeInterval = 30) throws -> Int {
         print("Clear text \(rect ?? "<focused>") timeout: \(timeout)s")
         guard let app else {
             throw Error.noAppFound
@@ -289,23 +374,19 @@ final class DroidrunPortalTools: XCTestCase {
 
         let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
         print("Cleared \(totalDeleted) chars in \(String(format: "%.1f", elapsed))ms")
-
-        return ClearResponse(
-            message: "cleared \(totalDeleted) characters",
-            charactersDeleted: totalDeleted,
-            method: "adaptive",
-            durationMs: elapsed
-        )
+        return totalDeleted
     }
 
     @MainActor
-    func enterText(rect: String? = nil, text: String) async throws {
+    func enterText(rect: String? = nil, text: String, clear: Bool = false) async throws {
         print("Enter Text \(rect ?? "<focused>") -> \(text.prefix(50))... (\(text.count) chars)")
         guard let app else {
             throw Error.noAppFound
         }
 
-        if let rect {
+        if clear {
+            _ = try clearText(rect: rect)
+        } else if let rect {
             try tapElement(rect: rect, count: 1, longPress: false)
         }
 
