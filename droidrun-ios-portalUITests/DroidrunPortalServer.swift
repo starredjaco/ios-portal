@@ -11,38 +11,73 @@ import FlyingFox
 final class DroidrunPortalServer: XCTestCase {
     var app: XCUIApplication?
     var server: HTTPServer!
-    
-    private let port: in_port_t = 6643
-    
+
+    private static let basePort: in_port_t = 6643
+    private static let maxPortOffset: in_port_t = 10
+
     override func setUpWithError() throws {
-        // Put setup code here. This method is called before the invocation of each test method in the class.
-        
-        // In UI tests it is usually best to stop immediately when a failure occurs.
         continueAfterFailure = true
-        
-        // In UI tests it’s important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
-        
+
         DroidrunPortalTools.shared.reset()
-        server = HTTPServer(port: self.port, handler: DroidrunPortalHandler())
-        
-        Task {
-            try? await server.run()
+
+        // Try ports starting from basePort, bump by one if taken.
+        var boundPort: in_port_t?
+        for offset: in_port_t in 0..<Self.maxPortOffset {
+            let port = Self.basePort + offset
+            let candidate = HTTPServer(port: port, handler: DroidrunPortalHandler())
+            let started = tryStartServer(candidate, port: port)
+            if started {
+                server = candidate
+                boundPort = port
+                break
+            }
         }
-                
+
+        guard let port = boundPort else {
+            XCTFail("Could not bind to any port in \(Self.basePort)–\(Self.basePort + Self.maxPortOffset - 1)")
+            return
+        }
+
+        print("Portal server listening on port \(port)")
         RunLoop.main.run()
     }
-    
+
+    /// Attempt to start the server on the given port.  Returns true if the
+    /// Task is running, false if the port was already taken.
+    private func tryStartServer(_ server: HTTPServer, port: in_port_t) -> Bool {
+        let semaphore = DispatchSemaphore(value: 0)
+        var ok = true
+
+        Task {
+            do {
+                // server.run() blocks forever on success, throws on bind error
+                try await server.run()
+            } catch {
+                ok = false
+                print("Port \(port) unavailable: \(error.localizedDescription)")
+            }
+            semaphore.signal()
+        }
+
+        // Give the server a moment to either bind or fail.
+        let result = semaphore.wait(timeout: .now() + 1.0)
+        if result == .timedOut {
+            // Timed out = server is running (blocking in run())
+            return true
+        }
+        return ok
+    }
+
     override func tearDownWithError() throws {
         let expectation = XCTestExpectation(description: "Stop server")
-        // Put teardown code here. This method is called after the invocation of each test method in the class.
         Task {
             await server?.stop()
             expectation.fulfill()
         }
-        
+
         wait(for: [expectation], timeout: 2)
     }
-    
+
     @MainActor
     func testLoop() async throws {
     }

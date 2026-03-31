@@ -9,10 +9,6 @@ import FlyingFox
 import FlyingFoxMacros
 import XCTest
 
-struct InfoResponse: Encodable {
-    let description: String
-}
-
 struct LaunchAppBody: Decodable {
     let bundleIdentifier: String
 }
@@ -43,17 +39,6 @@ struct TypeBody: Decodable {
     let rect: String?
     let text: String
     let clear: Bool?
-}
-
-struct ClearBody: Decodable {
-    let rect: String?
-}
-
-struct ClearResponse: Encodable {
-    let message: String
-    let charactersDeleted: Int
-    let method: String
-    let durationMs: Double
 }
 
 struct KeyBody: Decodable {
@@ -92,15 +77,29 @@ struct StateFullResponse: Encodable {
 @HTTPHandler
 struct DroidrunPortalHandler {
 
-    @JSONRoute("GET /")
-    func info() throws -> InfoResponse {
-        let description = XCUIDevice.shared.description
-        return InfoResponse(description: description)
-    }
-
     @JSONRoute("GET /state")
     func stateFull() async throws -> StateFullResponse {
-        return try await DroidrunPortalTools.shared.fetchStateFull()
+        do {
+            return try await DroidrunPortalTools.shared.fetchStateFull()
+        } catch {
+            // Return a degraded response instead of dropping the connection.
+            // The droidrun agent can retry and the test runner avoids
+            // accumulating unhandled errors that cause xcodebuild to kill it.
+            print("[Portal] /state error (returning fallback): \(error)")
+            return StateFullResponse(
+                a11y_tree: "",
+                phone_state: StateFullPhoneState(
+                    currentApp: "",
+                    packageName: "",
+                    keyboardVisible: false,
+                    isEditable: false,
+                    focusedElement: nil
+                ),
+                device_context: DeviceContext(
+                    screen_bounds: ScreenBounds(width: 430, height: 932)
+                )
+            )
+        }
     }
 
     @HTTPRoute("GET /vision/screenshot")
@@ -130,17 +129,12 @@ struct DroidrunPortalHandler {
 
     @JSONRoute("POST /inputs/type")
     func enterText(_ body: TypeBody) async throws -> GestureResponse {
-        if body.clear == true {
-            try await DroidrunPortalTools.shared.clearText(rect: body.rect)
-        }
-        try await DroidrunPortalTools.shared.enterText(rect: body.rect, text: body.text)
+        try await DroidrunPortalTools.shared.enterText(
+            rect: body.rect,
+            text: body.text,
+            clear: body.clear == true
+        )
         return GestureResponse(message: "entered text")
-    }
-
-    @JSONRoute("POST /inputs/clear")
-    func clearText(_ body: ClearBody) async throws -> ClearResponse {
-        let result = try await DroidrunPortalTools.shared.clearText(rect: body.rect)
-        return result
     }
 
     @JSONRoute("POST /inputs/key")
@@ -162,11 +156,5 @@ struct DroidrunPortalHandler {
     @JSONRoute("GET /device/date")
     func date() async throws -> DateResponse {
         return DateResponse(date: DroidrunPortalTools.shared.getDate())
-    }
-
-    @HTTPRoute("GET /debug")
-    func debug(_ request: HTTPRequest) -> HTTPResponse {
-        let text = DroidrunPortalTools.shared.app.debugDescription
-        return HTTPResponse(statusCode: .accepted, body: text.data(using: .utf8) ?? Data())
     }
 }
